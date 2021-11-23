@@ -58,6 +58,7 @@
 #include <ostream>
 #include <stdexcept>
 #include <vector>
+#include <iostream>
 
 /** Library version: 0xMmP (M=Major,m=minor,P=patch) */
 #define NANOFLANN_VERSION 0x132
@@ -80,6 +81,12 @@ namespace nanoflann {
 template <typename T> T pi_const() {
   return static_cast<T>(3.14159265358979323846);
 }
+
+/** Static dimension change for a L21_MD dostance */
+#define M_DIM (size_t)2
+#define SQRT3_INV 0.577350269
+
+const float SQRTM_INV=1.0/std::sqrt((float)M_DIM);
 
 /**
  * Traits if object is resizable and assignable (typically has a resize | assign
@@ -527,6 +534,108 @@ struct SO3_Adaptor {
   }
 };
 
+
+/** L21 distance functor adaptator (Etienne St-Onge)
+ * nanoflann::L21_3D_Adaptor
+ *
+ * \tparam T Type of the elements (e.g. double, float, uint8_t)
+ * \tparam DataSource Source of the data, i.e. where the vectors are stored
+ * \tparam _DistanceType Type of distance variables (must be signed)
+ * \tparam AccessorType Type of the arguments with which the data can be accessed
+ * (e.g. float, double, int64_t, T*)
+ */
+template <class T, class DataSource, typename _DistanceType = T,
+          typename AccessorType = uint32_t>
+struct L21_MD_Adaptor {
+  typedef T ElementType;
+  typedef _DistanceType DistanceType;
+
+  const DataSource &data_source;
+
+  L21_MD_Adaptor(const DataSource &_data_source)
+      : data_source(_data_source) {}
+
+  inline DistanceType evalMetric(const T *a, const AccessorType b_idx,
+                                 size_t size,
+                                 DistanceType worst_dist = -1) const {
+    DistanceType result = DistanceType();
+    size_t d = 0;
+
+    // if (size%M_DIM != 0)
+    //   throw std::runtime_error("Error: 'dimensionality' must be a multiple of M_DIM");
+
+    /* Process 4 items with each loop for efficiency. */
+    for (size_t i = 0; i < size; i += M_DIM){
+      DistanceType result_m = DistanceType();
+      for (size_t m = 0; m < M_DIM; m++){
+        const DistanceType diff = a[d] - data_source.kdtree_get_pt(b_idx, d);
+        result_m += diff*diff;
+        ++d;
+      }
+      result += std::sqrt(result_m);
+    }
+    return result;
+  }
+
+  template <typename U, typename V>
+  inline DistanceType accum_dist(const U a, const V b, const size_t) const {
+    const DistanceType diff = (a - b);
+    //return std::sqrt(diff * diff);
+    return std::abs(diff) * SQRTM_INV;
+    //throw std::runtime_error("Not adapted to L21, based on L1/sqrt(M) < L21");
+  }
+};
+
+
+/** L21 distance functor (Etienne St-Onge adaptator. Corresponding distance traits:
+ * nanoflann::L21_3D_Adaptor
+ *
+ * \tparam T Type of the elements (e.g. double, float, uint8_t)
+ * \tparam DataSource Source of the data, i.e. where the vectors are stored
+ * \tparam _DistanceType Type of distance variables (must be signed)
+ * \tparam AccessorType Type of the arguments with which the data can be accessed
+ * (e.g. float, double, int64_t, T*)
+ */
+ template <class T, class DataSource, typename _DistanceType = T,
+           typename AccessorType = uint32_t>
+ struct L21_3D_Adaptor {
+  typedef T ElementType;
+  typedef _DistanceType DistanceType;
+
+  const DataSource &data_source;
+
+  L21_3D_Adaptor(const DataSource &_data_source) : data_source(_data_source) {}
+
+  inline DistanceType evalMetric(const T *a, const AccessorType b_idx,
+                                 size_t size,
+                                 DistanceType worst_dist = -1) const {
+    DistanceType result = DistanceType();
+    const T *last = a + size;
+    size_t d = 0;
+
+    // if (size%3 != 0)
+    //   throw std::runtime_error("Error: 'dimensionality' must be a multiple of 3");
+
+    /* Process 3 items with each loop for efficiency. */
+    while (a < last) {
+      const DistanceType diff0 = a[0] - data_source.kdtree_get_pt(b_idx, d++);
+      const DistanceType diff1 = a[1] - data_source.kdtree_get_pt(b_idx, d++);
+      const DistanceType diff2 = a[2] - data_source.kdtree_get_pt(b_idx, d++);
+      result += std::sqrt(diff0 * diff0 + diff1 * diff1 + diff2 * diff2);
+      a += 3;
+    }
+    return result;
+  }
+
+  template <typename U, typename V>
+  inline DistanceType accum_dist(const U a, const V b, const size_t) const {
+    const DistanceType diff = (a - b);
+    return std::abs(diff) * SQRT3_INV;
+    //throw std::runtime_error("Not adapted to L21, based on L1/sqrt(3) < L21");
+  }
+};
+
+
 /** Metaprogramming helper traits class for the L1 (Manhattan) metric */
 struct metric_L1 : public Metric {
   template <class T, class DataSource, typename AccessorType = uint32_t> struct traits {
@@ -557,6 +666,21 @@ struct metric_SO3 : public Metric {
     typedef SO3_Adaptor<T, DataSource, T, AccessorType> distance_t;
   };
 };
+
+/** Etienne St-Onge L21_MD adaptor */
+struct metric_L21_MD : public Metric {
+  template <class T, class DataSource, typename AccessorType = uint32_t> struct traits {
+    typedef L21_MD_Adaptor<T, DataSource, T, AccessorType> distance_t;
+  };
+};
+
+/** Etienne St-Onge L21 adaptor */
+struct metric_L21_3D : public Metric {
+  template <class T, class DataSource, typename AccessorType = uint32_t> struct traits {
+    typedef L21_3D_Adaptor<T, DataSource, T, AccessorType> distance_t;
+  };
+};
+
 
 /** @} */
 
